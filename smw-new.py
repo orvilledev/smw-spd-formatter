@@ -262,9 +262,9 @@ if uploaded_files:
     wb.save(final_output)
     final_output.seek(0)
 
-    # --- Prepare combined filename with -OUTPUT ---
-    combined_filename = "-".join([f.name.rsplit(".", 1)[0] for f in uploaded_files])
-    combined_filename += "-OUTPUT.xlsx"
+    # --- Prepare combined filename with number of files ---
+    num_files = len(uploaded_files)
+    combined_filename = f"SMW-BC-Output-{num_files}-ITEMS.xlsx"
 
     # --- Download Button ---
     st.download_button(

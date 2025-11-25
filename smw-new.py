@@ -4,6 +4,7 @@ from io import BytesIO
 from openpyxl import load_workbook
 from openpyxl.styles import PatternFill, Font, Border, Side, Alignment
 import re
+from openpyxl.utils.dataframe import dataframe_to_rows
 
 # --- Streamlit Page Setup ---
 st.set_page_config(
@@ -34,7 +35,12 @@ if uploaded_files:
 
     for uploaded_file in uploaded_files:
         try:
-            df = pd.read_excel(uploaded_file, header=10, engine="openpyxl")
+            # read raw bytes so we can use the file multiple times
+            file_bytes = uploaded_file.read()
+            file_buf_for_df = BytesIO(file_bytes)
+            file_buf_for_wb = BytesIO(file_bytes)
+
+            df = pd.read_excel(file_buf_for_df, header=10, engine="openpyxl")
             df.columns = df.columns.astype(str).str.strip()
         except Exception as e:
             st.error(f"❌ Error reading file {uploaded_file.name}: {e}")
@@ -48,8 +54,23 @@ if uploaded_files:
             )
             continue
 
+        # --- Extract Customer PO and Routing # from Pag1_1!G5/G6 ---
+        try:
+            wb_temp = load_workbook(file_buf_for_wb, data_only=True)
+            if "Pag1_1" in wb_temp.sheetnames:
+                ws_temp = wb_temp["Pag1_1"]
+            else:
+                ws_temp = wb_temp[wb_temp.sheetnames[0]]
+            customer_po = ws_temp["G5"].value if ws_temp["G5"].value is not None else ""
+            routing_number = (
+                ws_temp["G6"].value if ws_temp["G6"].value is not None else ""
+            )
+        except Exception:
+            customer_po = ""
+            routing_number = ""
+
         # --- Box Contents ---
-        df_clean = df[required_columns].dropna(subset=["UPC", "Sku Units"])
+        df_clean = df[required_columns].dropna(subset=["UPC", "Sku Units"]).copy()
         df_clean["UPC"] = (
             df_clean["UPC"]
             .astype(str)
@@ -67,24 +88,28 @@ if uploaded_files:
         # Sequential Box Numbering
         if len(df_clean) > 0:
             df_clean["Box Number"] = df_clean["Box Number"].astype(int) + box_offset
-            max_box = df_clean["Box Number"].max()
-            box_offset = max_box
+            box_offset = df_clean["Box Number"].max()
 
-        # Add Routing # from filename
-        routing_number = uploaded_file.name.rsplit(".", 1)[0]
+        # Add Customer PO and Routing # columns
+        df_clean["Customer PO"] = customer_po
         df_clean["Routing #"] = routing_number
 
         consolidated_contents.append(df_clean)
 
-        # --- Extract Dimensions with Routing # from filename ---
+        # --- Extract Dimensions ---
         dimension_pattern = r"\b\d{1,3}\.\d{1,2}X\d{1,3}\.\d{1,2}X\d{1,3}\.\d{1,2}\b"
         dimension_data = []
         for _, row in df.iterrows():
             for col in df.columns:
                 val = str(row[col])
                 if re.match(dimension_pattern, val):
-                    length, width, height = val.split("X")
-                    dimension_data.append((float(length), float(width), float(height)))
+                    try:
+                        length, width, height = val.split("X")
+                        dimension_data.append(
+                            (float(length), float(width), float(height))
+                        )
+                    except:
+                        pass
         if dimension_data:
             dim_df = pd.DataFrame(dimension_data, columns=["Length", "Width", "Height"])
             dim_df.insert(0, "Box Number", range(1, len(dim_df) + 1))
@@ -92,18 +117,24 @@ if uploaded_files:
             consolidated_dims.append(dim_df)
 
     # --- Final Assembly ---
+    if len(consolidated_contents) == 0:
+        st.warning("No valid data found in uploaded files.")
+        st.stop()
+
     final_contents = pd.concat(consolidated_contents, ignore_index=True)
+    col_order = ["UPC", "Box Number", "Qty", "Customer PO", "Routing #"]
+    other_cols = [c for c in final_contents.columns if c not in col_order]
+    final_contents = final_contents[col_order + other_cols]
+
     final_dims = (
         pd.concat(consolidated_dims, ignore_index=True)
         if consolidated_dims
         else pd.DataFrame()
     )
-
-    # --- Reset Box Number to start at 1 in All Box Dimensions ---
     if not final_dims.empty:
         final_dims["Box Number"] = range(1, len(final_dims) + 1)
 
-    # --- Create Pivot Table (unique UPCs, summed quantities) ---
+    # --- Create Pivot Table ---
     all_grouped = final_contents.groupby(["UPC", "Box Number"], as_index=False)[
         "Qty"
     ].sum()
@@ -120,12 +151,10 @@ if uploaded_files:
     final_pivot = final_pivot.reindex(sorted(final_pivot.columns), axis=1)
     final_pivot_display = final_pivot.replace(0, "")
 
-    # --- Compute totals safely ---
     pivot_for_sum = final_pivot.fillna(0).astype(int)
     pivot_column_totals = pivot_for_sum.sum(axis=0)
     grand_total_value = pivot_column_totals.sum()
 
-    # --- Save to Excel ---
     output = BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         final_contents.to_excel(writer, sheet_name="All Box Contents", index=False)
@@ -155,8 +184,6 @@ if uploaded_files:
 
     # --- All Box Contents ---
     ws = wb["All Box Contents"]
-
-    # Format headers
     for cell in ws[1]:
         cell.font = bold_font
         cell.border = thin_border
@@ -166,7 +193,6 @@ if uploaded_files:
         else:
             cell.fill = header_fill
 
-    # Pivot Table starting at G1
     start_col = 7
     ws.cell(row=1, column=start_col, value="UPC").font = bold_font
     ws.cell(row=1, column=start_col).alignment = center_align
@@ -179,29 +205,25 @@ if uploaded_files:
         ws.cell(row=1, column=idx).fill = header_fill
         ws.cell(row=1, column=idx).border = thin_border
 
-    # Fill pivot table
     for r_idx, (upc, row) in enumerate(final_pivot_display.iterrows(), start=2):
         ws.cell(row=r_idx, column=start_col, value=upc).alignment = center_align
         for c_idx, value in enumerate(row.values, start=start_col + 1):
             ws.cell(row=r_idx, column=c_idx, value=value).alignment = center_align
 
-    # Pivot totals & Grand Total
+    # --- Pivot totals & grand total ---
     pivot_total_row = len(final_pivot_display) + 2
     ws.cell(row=pivot_total_row, column=start_col, value="Total").font = bold_font
     ws.cell(row=pivot_total_row, column=start_col).alignment = center_align
-
     for idx, col in enumerate(final_pivot_display.columns, start=start_col + 1):
         ws.cell(
             row=pivot_total_row, column=idx, value=pivot_column_totals[col]
         ).font = bold_font
         ws.cell(row=pivot_total_row, column=idx).alignment = center_align
-
     grand_total_col_idx = start_col + len(final_pivot_display.columns) + 1
     ws.cell(row=1, column=grand_total_col_idx, value="Grand Total").font = bold_font
     ws.cell(row=1, column=grand_total_col_idx).alignment = center_align
     ws.cell(row=1, column=grand_total_col_idx).fill = routing_fill
     ws.cell(row=1, column=grand_total_col_idx).border = thin_border
-
     ws.cell(
         row=pivot_total_row, column=grand_total_col_idx, value=grand_total_value
     ).font = bold_font
@@ -210,29 +232,22 @@ if uploaded_files:
         row=pivot_total_row, column=grand_total_col_idx
     ).fill = grand_total_value_fill
 
-    # --- Qty total & total number of boxes ---
+    # --- Totals below data ---
     last_data_row = len(final_contents) + 1
-    qty_total = final_contents["Qty"].sum()
-    unique_boxes = final_contents["Box Number"].nunique()
-
-    # Total Boxes
     ws.cell(row=last_data_row + 1, column=2, value="Total Boxes").font = bold_font
     ws.cell(row=last_data_row + 1, column=2).alignment = center_align
-    ws.cell(row=last_data_row + 1, column=3, value=unique_boxes).font = bold_font
+    ws.cell(
+        row=last_data_row + 1, column=3, value=final_contents["Box Number"].nunique()
+    ).font = bold_font
     ws.cell(row=last_data_row + 1, column=3).alignment = center_align
     ws.cell(row=last_data_row + 1, column=3).fill = grand_total_value_fill
-
-    # Total Qty
     ws.cell(row=last_data_row + 2, column=2, value="Total Qty").font = bold_font
     ws.cell(row=last_data_row + 2, column=2).alignment = center_align
-    ws.cell(row=last_data_row + 2, column=3, value=qty_total).font = bold_font
+    ws.cell(
+        row=last_data_row + 2, column=3, value=final_contents["Qty"].sum()
+    ).font = bold_font
     ws.cell(row=last_data_row + 2, column=3).alignment = center_align
     ws.cell(row=last_data_row + 2, column=3).fill = grand_total_value_fill
-
-    # Center all cells
-    for row in ws.iter_rows():
-        for cell in row:
-            cell.alignment = center_align
 
     # --- All Box Dimensions ---
     if not final_dims.empty:
@@ -249,8 +264,27 @@ if uploaded_files:
             for cell in row:
                 cell.alignment = center_align
 
-    # --- Auto-adjust column widths dynamically ---
-    for ws_iter in [ws] + ([wb["All Box Dimensions"]] if not final_dims.empty else []):
+    # --- Summary Sheet ---
+    summary_df = final_contents[["Customer PO", "Routing #"]].drop_duplicates(
+        ignore_index=True
+    )
+    ws_summary = wb.create_sheet(title="Summary", index=2)
+    for idx, col_name in enumerate(summary_df.columns, start=1):
+        cell = ws_summary.cell(row=1, column=idx, value=col_name)
+        cell.font = bold_font
+        cell.fill = header_fill
+        cell.alignment = center_align
+        cell.border = thin_border
+    for r_idx, row in enumerate(
+        dataframe_to_rows(summary_df, index=False, header=False), start=2
+    ):
+        for c_idx, value in enumerate(row, start=1):
+            cell = ws_summary.cell(row=r_idx, column=c_idx, value=value)
+            cell.alignment = center_align
+            cell.border = thin_border
+
+    # --- Auto-adjust all column widths for every sheet ---
+    for ws_iter in wb.worksheets:
         for col in ws_iter.columns:
             max_len = max(
                 len(str(cell.value)) if cell.value is not None else 0 for cell in col
@@ -262,11 +296,7 @@ if uploaded_files:
     wb.save(final_output)
     final_output.seek(0)
 
-    # --- Prepare combined filename with number of files ---
-    num_files = len(uploaded_files)
-    combined_filename = f"SMW-BC-Output-{num_files}-ITEMS.xlsx"
-
-    # --- Download Button ---
+    combined_filename = f"SMW-BC-Output-{len(uploaded_files)}-ITEMS.xlsx"
     st.download_button(
         label="💾 Download Consolidated Formatted Output",
         data=final_output,

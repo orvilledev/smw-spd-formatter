@@ -5,57 +5,85 @@ from openpyxl import load_workbook
 from openpyxl.styles import PatternFill, Font, Border, Side, Alignment
 from openpyxl.utils.dataframe import dataframe_to_rows
 import re
+import zipfile
 
 # --- Streamlit Page Setup ---
 st.set_page_config(
-    page_title="📦 SMW SPD Box Contents Formatter (Multi-File)",
+    page_title="📦 SMW SPD Box Contents Formatter (Multi-File + ZIP)",
     page_icon="📦",
     layout="wide",
 )
-st.title("📦 SMW SPD Box Contents Formatter (Multi-File)")
+st.title("📦 SMW SPD Box Contents Formatter (Multi-File + ZIP)")
 st.caption(
-    "Upload multiple Excel files and consolidate them into one formatted output."
+    "Upload multiple Excel or ZIP files and consolidate them into one formatted output."
 )
 
 # --- File Uploader ---
 uploaded_files = st.file_uploader(
-    "📁 Upload up to 20 Excel Sheets",
-    type=["xlsx", "xls"],
+    "📁 Upload up to 20 Excel or ZIP files",
+    type=["xlsx", "xls", "zip"],
     accept_multiple_files=True,
 )
 
 if uploaded_files:
     if len(uploaded_files) > 20:
-        st.error("❌ You can only upload up to 20 Excel files.")
+        st.error("❌ You can only upload up to 20 files.")
         st.stop()
 
+    all_files_to_process = []
+
+    # --- Extract Excel files from uploaded files ---
+    for uploaded_file in uploaded_files:
+        file_name = uploaded_file.name
+        file_bytes = uploaded_file.read()
+        uploaded_file.seek(0)
+
+        if file_name.lower().endswith((".xlsx", ".xls")):
+            all_files_to_process.append((file_name, BytesIO(file_bytes)))
+
+        elif file_name.lower().endswith(".zip"):
+            try:
+                with zipfile.ZipFile(BytesIO(file_bytes)) as z:
+                    for zip_item in z.namelist():
+                        if zip_item.lower().endswith((".xlsx", ".xls")):
+                            extracted_bytes = z.read(zip_item)
+                            arcname = (
+                                f"{file_name.split('.')[0]}_{zip_item.split('/')[-1]}"
+                            )
+                            all_files_to_process.append(
+                                (arcname, BytesIO(extracted_bytes))
+                            )
+            except zipfile.BadZipFile:
+                st.warning(f"⚠️ Cannot read ZIP file: {file_name}")
+
+    if len(all_files_to_process) == 0:
+        st.warning("No valid Excel files found in the uploaded files.")
+        st.stop()
+
+    # --- Initialize containers ---
     consolidated_contents = []
     consolidated_dims = []
     box_offset = 0
 
-    for uploaded_file in uploaded_files:
+    # --- Process each Excel file ---
+    for fname, fbytes in all_files_to_process:
         try:
-            file_bytes = uploaded_file.read()
-            file_buf_for_df = BytesIO(file_bytes)
-            file_buf_for_wb = BytesIO(file_bytes)
-
-            df = pd.read_excel(file_buf_for_df, header=10, engine="openpyxl")
+            df = pd.read_excel(fbytes, header=10, engine="openpyxl")
             df.columns = df.columns.astype(str).str.strip()
         except Exception as e:
-            st.error(f"❌ Error reading file {uploaded_file.name}: {e}")
+            st.error(f"❌ Error reading file {fname}: {e}")
             continue
 
         required_columns = ["UPC", "Box X", "Sku Units"]
         missing_cols = [c for c in required_columns if c not in df.columns]
         if missing_cols:
-            st.warning(
-                f"⚠️ File {uploaded_file.name} missing: {', '.join(missing_cols)}"
-            )
+            st.warning(f"⚠️ File {fname} missing: {', '.join(missing_cols)}")
             continue
 
         # --- Extract Customer PO and Routing # ---
         try:
-            wb_temp = load_workbook(file_buf_for_wb, data_only=True)
+            fbytes.seek(0)
+            wb_temp = load_workbook(fbytes, data_only=True)
             ws_temp = (
                 wb_temp["Page1_1"]
                 if "Page1_1" in wb_temp.sheetnames
@@ -104,7 +132,7 @@ if uploaded_files:
                     except:
                         pass
 
-        # --- Extract Weight from bold numbers in column G ---
+        # --- Extract Weight ---
         try:
             bold_cells = [
                 cell
@@ -117,7 +145,7 @@ if uploaded_files:
         except:
             weights = []
 
-        # --- Combine into All Box Dimensions DataFrame ---
+        # --- Combine Dimensions DataFrame ---
         num_boxes = max(len(weights), len(dimension_data), len(df_clean))
         boxes = range(
             box_offset - len(df_clean) + 1, box_offset - len(df_clean) + 1 + num_boxes
@@ -144,10 +172,6 @@ if uploaded_files:
         consolidated_dims.append(df_dims)
 
     # --- Final Assembly ---
-    if len(consolidated_contents) == 0:
-        st.warning("No valid data found in uploaded files.")
-        st.stop()
-
     final_contents = pd.concat(consolidated_contents, ignore_index=True)
     col_order = ["UPC", "Box Number", "Qty", "Customer PO", "Routing #"]
     final_contents = final_contents[
@@ -159,8 +183,6 @@ if uploaded_files:
         if consolidated_dims
         else pd.DataFrame()
     )
-
-    # --- Remove rows where Weight, Length, Width, Height are all empty ---
     if not final_dims.empty:
         final_dims = final_dims[
             final_dims[["Weight", "Length", "Width", "Height"]].apply(
@@ -178,7 +200,8 @@ if uploaded_files:
     output.seek(0)
     wb = load_workbook(output)
 
-    # --- Styles ---
+    # --- Styles & Pivot Table & Summary ---
+    # (Use your previous pivot, summary, and styling code exactly here)
     header_fill = PatternFill(
         start_color="e3d3a8", end_color="e3d3a8", fill_type="solid"
     )
@@ -204,7 +227,7 @@ if uploaded_files:
         else:
             cell.fill = header_fill
 
-    # --- Create Pivot Table in column J ---
+    # --- Create Pivot Table ---
     all_grouped = final_contents.groupby(["UPC", "Box Number"], as_index=False)[
         "Qty"
     ].sum()
@@ -231,7 +254,6 @@ if uploaded_files:
         ws.cell(row=1, column=idx).fill = header_fill
         ws.cell(row=1, column=idx).border = thin_border
 
-    # Fill pivot values
     for r_idx, (upc, row) in enumerate(final_pivot_display.iterrows(), start=2):
         ws.cell(row=r_idx, column=start_col, value=upc)
         for c_idx, value in enumerate(row.values, start=start_col + 1):
@@ -289,14 +311,11 @@ if uploaded_files:
         for c_idx, value in enumerate(row, start=1):
             ws_summary.cell(row=r_idx, column=c_idx, value=value)
 
-    # --- Center align all cells in all sheets ---
+    # --- Center align & auto-adjust ---
     for ws_iter in wb.worksheets:
         for row in ws_iter.iter_rows():
             for cell in row:
                 cell.alignment = Alignment(horizontal="center", vertical="center")
-
-    # --- Auto-adjust columns ---
-    for ws_iter in wb.worksheets:
         for col in ws_iter.columns:
             max_len = max(
                 len(str(cell.value)) if cell.value is not None else 0 for cell in col
@@ -308,7 +327,7 @@ if uploaded_files:
     wb.save(final_output)
     final_output.seek(0)
 
-    combined_filename = f"SMW-BC-Output-{len(uploaded_files)}-ITEMS.xlsx"
+    combined_filename = f"SMW-BC-Output-{len(all_files_to_process)}-ITEMS.xlsx"
     st.download_button(
         label="💾 Download Consolidated Formatted Output",
         data=final_output,

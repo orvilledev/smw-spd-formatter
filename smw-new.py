@@ -106,7 +106,7 @@ st.markdown("---")
 # =========================================================
 # SECTION 2: SMW SPD Box Contents Formatter (Option A logic)
 # =========================================================
-st.header("📑 SPD FORMATTER (SMW)")
+st.header("📄 SPD FORMATTER (SMW)")
 
 st.markdown(
     "Upload up to 100 Excel or ZIP files (these may be the same files used in the top section). "
@@ -563,7 +563,7 @@ st.markdown("---")
 # =========================================================
 # SECTION 3: Single-file SMW Box Contents Formatter (Code 3)
 # =========================================================
-st.header("📑 LTL FORMATTER (SMW)")
+st.header("📝 LTL FORMATTER (SMW)")
 
 st.markdown(
     "Upload a single Excel file. This section processes one file, creates Box Contents, Pivot, and Box Dimensions."

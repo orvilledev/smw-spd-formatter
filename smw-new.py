@@ -20,14 +20,14 @@ st.caption(
 
 # --- File Uploader ---
 uploaded_files = st.file_uploader(
-    "📁 Upload up to 100 Excel or ZIP files",
+    "📁 Upload up to 20 Excel or ZIP files",
     type=["xlsx", "xls", "zip"],
     accept_multiple_files=True,
 )
 
 if uploaded_files:
-    if len(uploaded_files) > 100:
-        st.error("❌ You can only upload up to 100 files.")
+    if len(uploaded_files) > 20:
+        st.error("❌ You can only upload up to 20 files.")
         st.stop()
 
     all_files_to_process = []
@@ -307,45 +307,33 @@ if uploaded_files:
     ).font = bold_font
     ws.cell(row=pivot_total_row, column=total_col_idx).fill = special_fill
 
-    # --- Check if Customer POs are alphabetically arranged ---
+    # ------------------------------------------------------------------
+    # ✅ ADDITION: CHECK IF CUSTOMER PO (COLUMN D) IS ALPHABETICALLY SORTED
+    # ------------------------------------------------------------------
     ws_contents = wb["All Box Contents"]
+
     customer_po_values = []
     for row in ws_contents.iter_rows(min_row=2, min_col=4, max_col=4):
         value = row[0].value
         if value not in [None, ""]:
             customer_po_values.append(str(value))
+
     last_row = ws_contents.max_row
+
+    # Check alphabetical
     if customer_po_values == sorted(customer_po_values, key=lambda x: x.lower()):
         status_text = "✔ POs are alphabetically arranged"
-        status_color = "92d050"
+        status_color = "92d050"  # green
     else:
         status_text = "❌ POs are NOT alphabetically arranged"
-        status_color = "ff0000"
+        status_color = "ff0000"  # red
+
     status_cell = ws_contents.cell(row=last_row + 2, column=4, value=status_text)
     status_cell.font = Font(bold=True, color="000000")
     status_cell.fill = PatternFill(start_color=status_color, end_color=status_color, fill_type="solid")
     status_cell.border = thin_border
     status_cell.alignment = center_align
-
-    # --- Alternate light coloring A-D per Routing # (Column E), only rows with UPC ---
-    light_colors = ["FFF2CC", "D9EAD3"]  # two light colors
-    routing_to_color = {}
-    color_index = 0
-    for row in ws.iter_rows(min_row=2, max_row=ws.max_row, min_col=1, max_col=5):
-        upc_value = row[0].value  # Column A
-        if upc_value is None or str(upc_value).strip() == "":
-            continue
-        routing_value = row[4].value  # Column E
-        if routing_value not in routing_to_color:
-            routing_to_color[routing_value] = light_colors[color_index]
-            color_index = 1 - color_index
-        fill_color = PatternFill(
-            start_color=routing_to_color[routing_value],
-            end_color=routing_to_color[routing_value],
-            fill_type="solid"
-        )
-        for cell in row[:4]:
-            cell.fill = fill_color
+    # ------------------------------------------------------------------
 
     # --- Style Dimensions ---
     if not final_dims.empty:

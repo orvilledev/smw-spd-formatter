@@ -806,4 +806,3 @@ if uploaded_file_single:
                 file_name=output_filename,
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
-             st.success("✅ Processing complete. Download the formatted workbook above.")

@@ -551,7 +551,7 @@ if uploaded_files_formatter:
 
             combined_filename = f"SMW-BC-Output-{len(all_files_to_process)}-ITEMS.xlsx"
             st.download_button(
-                label="💾 Download Consolidated Formatted Output (Option A)",
+                label="💾 Download Consolidated Formatted Output",
                 data=final_output,
                 file_name=combined_filename,
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -806,3 +806,4 @@ if uploaded_file_single:
                 file_name=output_filename,
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
+             st.success("✅ Processing complete. Download the formatted workbook above.")

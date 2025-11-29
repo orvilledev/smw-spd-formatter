@@ -208,24 +208,18 @@ if uploaded_files:
         else pd.DataFrame()
     )
     if not final_dims.empty:
-        # 1. Remove rows with empty Weight, Length, Width, or Height
         final_dims = final_dims.dropna(
             subset=["Weight", "Length", "Width", "Height"], how="any"
         ).reset_index(drop=True)
-
-        # 2. Remove duplicate Routing # (keep first occurrence)
         final_dims = final_dims.drop_duplicates(
             subset=["Routing #"], keep="first"
         ).reset_index(drop=True)
 
-        # 3. Order Routing # to match Summary tab
         summary_routing_order = summary_df["Routing #"].tolist()
         final_dims["Routing #"] = pd.Categorical(
             final_dims["Routing #"], categories=summary_routing_order, ordered=True
         )
         final_dims = final_dims.sort_values("Routing #").reset_index(drop=True)
-
-        # 4. Reassign sequential Box Numbers
         final_dims["Box Number"] = range(1, len(final_dims) + 1)
 
     # --- Write Excel ---
@@ -307,10 +301,39 @@ if uploaded_files:
 
     for idx, col in enumerate(final_pivot_display.columns, start=start_col + 1):
         ws.cell(row=pivot_total_row, column=idx, value=pivot_column_totals[col])
+
     ws.cell(
         row=pivot_total_row, column=total_col_idx, value=grand_total_value
     ).font = bold_font
     ws.cell(row=pivot_total_row, column=total_col_idx).fill = special_fill
+
+    # ------------------------------------------------------------------
+    # ✅ ADDITION: CHECK IF CUSTOMER PO (COLUMN D) IS ALPHABETICALLY SORTED
+    # ------------------------------------------------------------------
+    ws_contents = wb["All Box Contents"]
+
+    customer_po_values = []
+    for row in ws_contents.iter_rows(min_row=2, min_col=4, max_col=4):
+        value = row[0].value
+        if value not in [None, ""]:
+            customer_po_values.append(str(value))
+
+    last_row = ws_contents.max_row
+
+    # Check alphabetical
+    if customer_po_values == sorted(customer_po_values, key=lambda x: x.lower()):
+        status_text = "✔ POs are alphabetically arranged"
+        status_color = "92d050"  # green
+    else:
+        status_text = "❌ POs are NOT alphabetically arranged"
+        status_color = "ff0000"  # red
+
+    status_cell = ws_contents.cell(row=last_row + 2, column=4, value=status_text)
+    status_cell.font = Font(bold=True, color="000000")
+    status_cell.fill = PatternFill(start_color=status_color, end_color=status_color, fill_type="solid")
+    status_cell.border = thin_border
+    status_cell.alignment = center_align
+    # ------------------------------------------------------------------
 
     # --- Style Dimensions ---
     if not final_dims.empty:

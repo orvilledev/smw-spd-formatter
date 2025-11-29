@@ -566,7 +566,7 @@ st.markdown("---")
 st.header("📑 LTL FORMATTER (SMW)")
 
 st.markdown(
-    "Upload a single Excel file. This section processes one file, creates Box Contents, Pivot, and Box Dimensions, and shows metrics + previews."
+    "Upload a single Excel file. This section processes one file, creates Box Contents, Pivot, and Box Dimensions."
 )
 
 uploaded_file_single = st.file_uploader(

@@ -40,7 +40,6 @@ if uploaded_files:
 
         if file_name.lower().endswith((".xlsx", ".xls")):
             all_files_to_process.append((file_name, BytesIO(file_bytes)))
-
         elif file_name.lower().endswith(".zip"):
             try:
                 with zipfile.ZipFile(BytesIO(file_bytes)) as z:
@@ -140,12 +139,11 @@ if uploaded_files:
                 if cell.font.bold and cell.value is not None
             ]
             if bold_cells:
-                bold_cells = bold_cells[:-1]  # skip last bold cell
+                bold_cells = bold_cells[:-1]
             weights = [cell.value for cell in bold_cells]
         except:
             weights = []
 
-        # --- Combine Dimensions DataFrame ---
         num_boxes = max(len(weights), len(dimension_data), len(df_clean))
         boxes = range(
             box_offset - len(df_clean) + 1, box_offset - len(df_clean) + 1 + num_boxes
@@ -177,18 +175,57 @@ if uploaded_files:
     final_contents = final_contents[
         col_order + [c for c in final_contents.columns if c not in col_order]
     ]
+    final_contents = final_contents.sort_values(
+        by="Customer PO", ascending=True
+    ).reset_index(drop=True)
 
+    # --- Reassign Box Number based on Routing # groups ---
+    routing_series = final_contents["Routing #"].fillna("").astype(str)
+    routing_to_group = {}
+    group_list = []
+    group_counter = 1
+    for r in routing_series:
+        if r not in routing_to_group:
+            routing_to_group[r] = group_counter
+            group_counter += 1
+        group_list.append(routing_to_group[r])
+    final_contents["Box Number"] = group_list
+    final_contents["Box Number"] = final_contents["Box Number"].astype(int)
+    cols = list(final_contents.columns)
+    if "Box Number" in cols:
+        cols.insert(1, cols.pop(cols.index("Box Number")))
+        final_contents = final_contents[cols]
+
+    # --- Summary DataFrame ---
+    summary_df = final_contents[["Customer PO", "Routing #"]].drop_duplicates(
+        ignore_index=True
+    )
+
+    # --- Final Dimensions Processing ---
     final_dims = (
         pd.concat(consolidated_dims, ignore_index=True)
         if consolidated_dims
         else pd.DataFrame()
     )
     if not final_dims.empty:
-        final_dims = final_dims[
-            final_dims[["Weight", "Length", "Width", "Height"]].apply(
-                lambda x: x.astype(str).str.strip().astype(bool).any(), axis=1
-            )
-        ]
+        # 1. Remove rows with empty Weight, Length, Width, or Height
+        final_dims = final_dims.dropna(
+            subset=["Weight", "Length", "Width", "Height"], how="any"
+        ).reset_index(drop=True)
+
+        # 2. Remove duplicate Routing # (keep first occurrence)
+        final_dims = final_dims.drop_duplicates(
+            subset=["Routing #"], keep="first"
+        ).reset_index(drop=True)
+
+        # 3. Order Routing # to match Summary tab
+        summary_routing_order = summary_df["Routing #"].tolist()
+        final_dims["Routing #"] = pd.Categorical(
+            final_dims["Routing #"], categories=summary_routing_order, ordered=True
+        )
+        final_dims = final_dims.sort_values("Routing #").reset_index(drop=True)
+
+        # 4. Reassign sequential Box Numbers
         final_dims["Box Number"] = range(1, len(final_dims) + 1)
 
     # --- Write Excel ---
@@ -201,7 +238,6 @@ if uploaded_files:
     wb = load_workbook(output)
 
     # --- Styles & Pivot Table & Summary ---
-    # (Use your previous pivot, summary, and styling code exactly here)
     header_fill = PatternFill(
         start_color="e3d3a8", end_color="e3d3a8", fill_type="solid"
     )
@@ -222,10 +258,7 @@ if uploaded_files:
     for cell in ws[1]:
         cell.font = bold_font
         cell.border = thin_border
-        if cell.value == "Routing #":
-            cell.fill = special_fill
-        else:
-            cell.fill = header_fill
+        cell.fill = special_fill if cell.value == "Routing #" else header_fill
 
     # --- Create Pivot Table ---
     all_grouped = final_contents.groupby(["UPC", "Box Number"], as_index=False)[
@@ -259,63 +292,53 @@ if uploaded_files:
         for c_idx, value in enumerate(row.values, start=start_col + 1):
             ws.cell(row=r_idx, column=c_idx, value=value)
 
-    # Row totals per UPC
     total_col_idx = start_col + len(final_pivot_display.columns) + 1
     ws.cell(row=1, column=total_col_idx, value="Total per UPC").font = bold_font
     ws.cell(row=1, column=total_col_idx).fill = special_fill
+
     for r_idx, total in enumerate(pivot_row_totals, start=2):
         ws.cell(row=r_idx, column=total_col_idx, value=total)
 
-    # Column totals per Box
     pivot_total_row = len(final_pivot_display) + 2
     ws.cell(
         row=pivot_total_row, column=start_col, value="Total per Box"
     ).font = bold_font
     ws.cell(row=pivot_total_row, column=start_col).fill = special_fill
+
     for idx, col in enumerate(final_pivot_display.columns, start=start_col + 1):
         ws.cell(row=pivot_total_row, column=idx, value=pivot_column_totals[col])
-
-    # Grand total
     ws.cell(
         row=pivot_total_row, column=total_col_idx, value=grand_total_value
     ).font = bold_font
     ws.cell(row=pivot_total_row, column=total_col_idx).fill = special_fill
 
-    # --- Style All Box Dimensions headers ---
+    # --- Style Dimensions ---
     if not final_dims.empty:
         ws_dims = wb["All Box Dimensions"]
         for cell in ws_dims[1]:
             cell.font = bold_font
             cell.border = thin_border
-            if cell.value == "Routing #":
-                cell.fill = special_fill
-            else:
-                cell.fill = header_fill
+            cell.fill = special_fill if cell.value == "Routing #" else header_fill
 
-    # --- Summary Sheet headers ---
-    summary_df = final_contents[["Customer PO", "Routing #"]].drop_duplicates(
-        ignore_index=True
-    )
+    # --- Summary Sheet ---
     ws_summary = wb.create_sheet(title="Summary", index=2)
     for idx, col_name in enumerate(summary_df.columns, start=1):
         cell = ws_summary.cell(row=1, column=idx, value=col_name)
         cell.font = bold_font
         cell.border = thin_border
-        if col_name == "Routing #":
-            cell.fill = special_fill
-        else:
-            cell.fill = header_fill
+        cell.fill = special_fill if col_name == "Routing #" else header_fill
+
     for r_idx, row in enumerate(
         dataframe_to_rows(summary_df, index=False, header=False), start=2
     ):
         for c_idx, value in enumerate(row, start=1):
             ws_summary.cell(row=r_idx, column=c_idx, value=value)
 
-    # --- Center align & auto-adjust ---
+    # --- Center align + Auto column widths ---
     for ws_iter in wb.worksheets:
         for row in ws_iter.iter_rows():
             for cell in row:
-                cell.alignment = Alignment(horizontal="center", vertical="center")
+                cell.alignment = center_align
         for col in ws_iter.columns:
             max_len = max(
                 len(str(cell.value)) if cell.value is not None else 0 for cell in col

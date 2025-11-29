@@ -20,14 +20,14 @@ st.caption(
 
 # --- File Uploader ---
 uploaded_files = st.file_uploader(
-    "📁 Upload up to 20 Excel or ZIP files",
+    "📁 Upload up to 100 Excel or ZIP files",
     type=["xlsx", "xls", "zip"],
     accept_multiple_files=True,
 )
 
 if uploaded_files:
-    if len(uploaded_files) > 20:
-        st.error("❌ You can only upload up to 20 files.")
+    if len(uploaded_files) > 100:
+        st.error("❌ You can only upload up to 100 files.")
         st.stop()
 
     all_files_to_process = []

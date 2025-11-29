@@ -13,7 +13,6 @@ from openpyxl.utils import get_column_letter
 # --- Page config (single call) ---
 st.set_page_config(
     page_title="📦 Excel Tools & SMW Formatters",
-    page_icon="📦",
     layout="wide",
 )
 
